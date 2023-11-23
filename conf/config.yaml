@@ -30,6 +30,3 @@ trainer:
   eval_glue: False
   eval_msgs: False
   eval_perplexity: True
-
-pos_lookup:
-  similarity_metric: 'cosine'
