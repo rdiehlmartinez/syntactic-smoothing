@@ -72,11 +72,7 @@ class TrainerParams(DictConfig):
     lr: float
     num_warmup_steps: int
     max_training_steps: int
-    eval_blimp: bool
-    eval_glue: bool
-    eval_msgs: bool
-    eval_perplexity: bool
-
+    evaluation_metrics : List[str]
 
 ### Curriculum learning parameter: can be either objective or data-driven ###
 

@@ -61,6 +61,7 @@ from .dataloader import CurriculumDataLoader
 logger = logging.getLogger(__name__)
 objective_cl_logger = logging.getLogger("Objective Curriculum")
 
+POSSIBLE_METRICS = ["blimp", "perplexity", "blimp_bias", "aoa", "glue", "msgs"]
 
 class TaskTrainerCallback(TrainerCallback):
     """
@@ -105,10 +106,7 @@ class CustomTrainer(Trainer):
 
         self.experiment_group = hydra_config.experiment.group
         self.experiment_name = hydra_config.experiment.name
-        self.eval_blimp = hydra_config.trainer.eval_blimp
-        self.eval_glue = hydra_config.trainer.eval_glue
-        self.eval_msgs = hydra_config.trainer.eval_msgs
-        self.eval_perplexity = hydra_config.trainer.eval_perplexity
+        self.evaluation_metrics = hydra_config.trainer.evaluation_metrics
 
         super().__init__(args=args, **kwargs)
 
@@ -125,6 +123,12 @@ class CustomTrainer(Trainer):
             raise ValueError(
                 "The model needs to be passed in as a keyword argument to the Trainer"
             )
+        
+        for metric in self.evaluation_metrics:
+            if metric not in POSSIBLE_METRICS:
+                raise ValueError(
+                    f"Invalid evaluation metric {metric}. Possible metrics are {POSSIBLE_METRICS}"
+                )
 
         self.objective_curriculum = ObjectiveCurriculum(
             curriculum_cfg=self.objective_curriculum_cfg,
@@ -393,7 +397,7 @@ class CustomTrainer(Trainer):
 
         metrics = {}
 
-        if self.eval_perplexity:
+        if 'perplexity' in self.evaluation_metrics:
 
             # Additional behavior - evaluate perplexity
             # Get 10_000 samples from the eval dataset
@@ -484,10 +488,8 @@ class CustomTrainer(Trainer):
                 gathered_perplexities
             ).item() 
 
-            metrics[f"{metric_key_prefix}_perplexity_mean"] = gathered_perplexity_mean
-            metrics[f"{metric_key_prefix}_perplexity_std"] = gathered_perplexity_std
-
-            evaluator_metrics = {}
+            metrics["perplexity_mean"] = gathered_perplexity_mean
+            metrics["perplexity_std"] = gathered_perplexity_std
 
             # On the main process we need to save out the perplexities to the output directory
             if self.is_world_process_zero():
@@ -557,7 +559,7 @@ class CustomTrainer(Trainer):
                     pos_lookup=self.pos_lookup,
                 )
                 perplexity_bias_metrics = perplexity_bias_evaluator()
-                evaluator_metrics.update(perplexity_bias_metrics)  # type: ignore
+                metrics.update(perplexity_bias_metrics)  # type: ignore
 
         self.save_model(self.args.output_dir, _internal_call=True)
         # if world size > 1, then we need to synchronize the model across all processes
@@ -567,7 +569,7 @@ class CustomTrainer(Trainer):
         inference_model_dir = os.path.join(self.args.output_dir, "lm_model")
 
         # Additional behaviour - evaluate on BLIMP
-        if self.eval_blimp:
+        if 'blimp' in self.evaluation_metrics:
             logging.info("Evaluating on BLIMP and AOA...")
             blimp_evaluator = BlimpEvaluator(
                 inference_model_dir,
@@ -576,12 +578,13 @@ class CustomTrainer(Trainer):
                 world_size=self.args.world_size,
                 dry_run=self.dry_run,
                 keep_predictions=True, # NOTE: For POS MERGE we need to keep the predictions
+                run_aoa='aoa' in self.evaluation_metrics,
             )
             # Get average of blimp metrics
             blimp_metrics = blimp_evaluator()
-            evaluator_metrics.update(blimp_metrics)  # type: ignore
+            metrics.update(blimp_metrics)  # type: ignore
 
-        if self.eval_glue or self.eval_msgs:
+        if 'glue' in self.evaluation_metrics or 'msgs' in self.evaluation_metrics:
             logging.info("Evaluating on finetuning tasks...")
             finetune_evaluator = FinetuneEvaluator(
                 inference_model_dir,
@@ -589,19 +592,19 @@ class CustomTrainer(Trainer):
                 process_index=self.args.process_index,  # world (global) process index
                 world_size=self.args.world_size,
                 dry_run=self.dry_run,
-                run_glue=self.eval_glue,
-                run_msgs=self.eval_msgs,
+                run_glue='glue' in self.evaluation_metrics,
+                run_msgs='msgs' in self.evaluation_metrics,
                 keep_predictions=True, # NOTE: For POS MERGE we need to keep the predictions
             )
             # Get average of glue metrics
             finetune_metrics = finetune_evaluator()
-            evaluator_metrics.update(finetune_metrics)  # type: ignore
+            metrics.update(finetune_metrics)  # type: ignore
 
          # Save results to an all_predictions.json file
         collect_results(inference_model_dir)
 
-        if self.eval_blimp and self.is_world_process_zero():
-            logging.info('Evaluating bias on BLIMP predictions...')
+        if 'blimp_bias' in self.evaluation_metrics and self.is_world_process_zero():
+            logging.info('Evaluating bias on BLIMP predictions and getting finegrained BLIMP scores...')
             blimp_prediction_evaluator = BlimpBiasEvaluator(
                 os.path.join(inference_model_dir, "all_predictions.json"),
                 tokenizer=self.tokenizer,
@@ -609,15 +612,15 @@ class CustomTrainer(Trainer):
                 dry_run=self.dry_run,
             )
             blimp_bias_metrics = blimp_prediction_evaluator()
-            evaluator_metrics.update(blimp_bias_metrics)  # type: ignore
+            metrics.update(blimp_bias_metrics)  # type: ignore
 
-        for key in list(evaluator_metrics.keys()):
+        for key in list(metrics.keys()):
             if not key.startswith(f"{metric_key_prefix}_"):
-                evaluator_metrics[
+                metrics[
                     f"{metric_key_prefix}_{key}"
-                ] = evaluator_metrics.pop(key)
+                ] = metrics.pop(key)
 
-        metrics.update(evaluator_metrics)
+        metrics.update(metrics)
 
         if f"{metric_key_prefix}_jit_compilation_time" in metrics:
             start_time += metrics[f"{metric_key_prefix}_jit_compilation_time"]
