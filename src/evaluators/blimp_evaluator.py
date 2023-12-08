@@ -14,9 +14,6 @@ import torch.distributed as dist
 
 logger = logging.getLogger(__name__)
 
-# NOTE: ADDED FOR POS MERGE TO SKIP AOA FOR THIS PROJECT
-SKIP_AOA = True
-
 class BlimpEvaluator(object):
     def __init__(
         self,
@@ -26,6 +23,7 @@ class BlimpEvaluator(object):
         world_size: int,
         dry_run: bool = False,
         keep_predictions: bool = False,
+        run_aoa: bool = False,
     ):
         """
         Args:
@@ -43,6 +41,7 @@ class BlimpEvaluator(object):
         self.world_size = world_size
         self.dry_run = dry_run
         self.keep_predictions = keep_predictions
+        self.run_aoa = run_aoa
 
     def __call__(self) -> Union[Dict[str, Any], None]:
         """
@@ -53,7 +52,7 @@ class BlimpEvaluator(object):
 
         # Start a subprocess to run the lib/evaluation-pipeline/babylm_eval.py script
         logger.info("Running BLIMP and AOA evaluation script...")
-        if SKIP_AOA:
+        if not self.run_aoa:
             logger.info("Skipping AOA evaluation...")
         cmd = (
             "cd lib/evaluation-pipeline; python babylm_eval.py ../../"
@@ -64,7 +63,7 @@ class BlimpEvaluator(object):
             + f" --world_size {self.world_size}"
             + (" --dry_run True" if self.dry_run else "")
         )
-        if not SKIP_AOA:
+        if self.run_aoa:
             cmd += " --run_aoa"
 
         subprocess.run(cmd, shell=True)
@@ -89,7 +88,7 @@ class BlimpEvaluator(object):
         accuracies["blimp_avg"] = sum(accuracies.values()) / len(accuracies)
 
         # NOTE: Uncomment to use AOA
-        if not SKIP_AOA:
+        if self.run_aoa:
             with open(
                 os.path.join(
                     self.out_dir,
@@ -109,7 +108,7 @@ class BlimpEvaluator(object):
         # Delete the zeroshot directory; ensure that only one process does this
         if self.process_index == 0 and not self.keep_predictions:
             shutil.rmtree(os.path.join(self.out_dir, "zeroshot"))
-            if not SKIP_AOA:
+            if self.run_aoa:
                 shutil.rmtree(os.path.join(self.out_dir, "aoa_prediction"))
 
         return accuracies

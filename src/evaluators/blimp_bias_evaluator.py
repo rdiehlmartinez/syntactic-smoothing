@@ -35,6 +35,7 @@ class BlimpBiasEvaluator(object):
         tokenizer: PreTrainedTokenizerFast,
         pos_lookup: POSLookup,
         dry_run: bool = False,
+        blimp_data_dir: str = BLIMP_DATA_DIR,
     ):
         """
         Args:
@@ -230,23 +231,13 @@ class BlimpBiasEvaluator(object):
         accuracies['high_frequency'] = high_frequency_data['correct'].sum() / len(high_frequency_data)
 
         return accuracies
+    
+    def get_bias_scores(self, task_type, bottom_percentile, top_percentile, frequency_column, subtasks=True):
+        """ Returns the four measures of bias. """
 
-    def __call__(self) -> Union[Dict[str, Any], None]:
-        """
-        Loads the Blimp dataset and compares the model's predictions to the ground truth, splitting by high and low frequency tokens.
-        """
-
-        # Start a subprocess to run the lib/evaluation-pipeline/babylm_eval.py script
-        logger.info("Running BLIMP prediction evaluation...")
-
-        low = 33
-        high = 66
-        task_type = 'replacement'
-
-        eval_results = {}
-        split_data = self.get_split_scores_per_task(task_type, low, high, 'difference_average_frequency', subtasks=True)
-        split_all_overall = self.get_split_scores_all(task_type, low, high, 'difference_average_frequency', subtasks=True)
-        split_all_task_splits = self.get_split_scores_all_by_task(task_type, low, high, 'difference_average_frequency', subtasks=True)
+        split_data = self.get_split_scores_per_task(task_type, bottom_percentile, top_percentile, frequency_column, subtasks=subtasks)
+        split_all_overall = self.get_split_scores_all(task_type, bottom_percentile, top_percentile, frequency_column, subtasks=subtasks)
+        split_all_task_splits = self.get_split_scores_all_by_task(task_type, bottom_percentile, top_percentile, frequency_column, subtasks=subtasks)
 
         # For some tasks, there's not enough of a distribution of frequencies to get a meaningful result,
         # so we only count those tasks where there are both low and high frequency examples
@@ -260,10 +251,50 @@ class BlimpBiasEvaluator(object):
         total_increase = split_all_overall['high_frequency'] - split_all_overall['low_frequency']
         total_increase_task_splits = split_all_task_splits['high_frequency'] - split_all_task_splits['low_frequency']
 
-        eval_results['blimp_bias_percentage_increasing'] = percentage_increasing
-        eval_results['blimp_bias_average_increase'] = average_increase
-        eval_results['blimp_bias_total_increase'] = total_increase
-        eval_results['blimp_bias_total_increase'] = total_increase
-        eval_results['blimp_bias_total_increase_task_splits'] = total_increase_task_splits
+        bias_scores = {}
+        bias_scores['blimp_bias_percentage_increasing'] = percentage_increasing
+        bias_scores['blimp_bias_average_increase'] = average_increase
+        bias_scores['blimp_bias_total_increase'] = total_increase
+        bias_scores['blimp_bias_total_increase_task_splits'] = total_increase_task_splits
 
-        return eval_results
+        return bias_scores
+
+    def get_blimp_scores(self):
+        """ Returns detailed BLIMP scores computed from the predictions file """
+
+        blimp_micro_average = self.prediction_data['correct'].mean()
+        blimp_macro_task_average = self.prediction_data.groupby('task')['correct'].mean().mean()
+        blimp_task_subtask_average = self.prediction_data.groupby('subtask')['correct'].mean().mean()
+
+        blimp_r_micro_average = self.get_task_data_by_type('replacement')['correct'].mean()
+        blimp_r_macro_task_average = self.get_task_data_by_type('replacement').groupby('task')['correct'].mean().mean()
+        blimp_r_task_subtask_average = self.get_task_data_by_type('replacement').groupby('subtask')['correct'].mean().mean()
+
+        blimp_scores = {}
+        blimp_scores['blimp_micro_average'] = blimp_micro_average
+        blimp_scores['blimp_macro_task_average'] = blimp_macro_task_average
+        blimp_scores['blimp_task_subtask_average'] = blimp_task_subtask_average
+        blimp_scores['blimp_r_micro_average'] = blimp_r_micro_average
+        blimp_scores['blimp_r_macro_task_average'] = blimp_r_macro_task_average
+        blimp_scores['blimp_r_task_subtask_average'] = blimp_r_task_subtask_average
+
+        return blimp_scores
+
+    def __call__(self) -> Union[Dict[str, Any], None]:
+        """
+        Loads the Blimp dataset and compares the model's predictions to the ground truth, splitting by high and low frequency tokens.
+        """
+
+        # Start a subprocess to run the lib/evaluation-pipeline/babylm_eval.py script
+        logger.info("Running BLIMP prediction evaluation...")
+
+        bottom_percentile = 33
+        top_percentile = 66
+        task_type = 'replacement'
+        measure = 'difference_average_frequency'
+
+        bias_results = self.get_bias_scores(task_type, bottom_percentile, top_percentile, measure, subtasks=True)
+        #blimp_results = self.get_blimp_scores()
+
+        #eval_results = bias_results.extend(blimp_results)
+        return bias_results
