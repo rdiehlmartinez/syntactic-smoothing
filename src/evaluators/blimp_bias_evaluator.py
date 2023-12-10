@@ -52,10 +52,10 @@ class BlimpBiasEvaluator(object):
         self.tokenizer = tokenizer
 
         self.blimp_gold = {}
-        for file in os.listdir(BLIMP_DATA_DIR):
+        for file in os.listdir(blimp_data_dir):
             if file.endswith('.json'):
                 # Load json file
-                with open(os.path.join(BLIMP_DATA_DIR, file), 'r') as f:
+                with open(os.path.join(blimp_data_dir, file), 'r') as f:
                     self.blimp_gold[file.split('.')[0]] = load_dataset('json', data_files=f.name)['train']
 
         self.prediction_data = self.get_prediction_data()
@@ -256,6 +256,9 @@ class BlimpBiasEvaluator(object):
         bias_scores['blimp_bias_average_increase'] = average_increase
         bias_scores['blimp_bias_total_increase'] = total_increase
         bias_scores['blimp_bias_total_increase_task_splits'] = total_increase_task_splits
+        bias_scores['blimp_score_low_frequency'] = split_all_overall['low_frequency']
+        bias_scores['blimp_score_medium_frequency'] = split_all_overall['medium_frequency']
+        bias_scores['blimp_score_high_frequency'] = split_all_overall['high_frequency']
 
         return bias_scores
 
