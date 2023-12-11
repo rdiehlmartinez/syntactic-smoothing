@@ -174,10 +174,7 @@ def main(cfg: BabyLMConfig):
     trainer._load_best_model()
 
     logger.info('Loaded best model. Overriding config to evaluate on all tasks.')
-    trainer.eval_glue = True
-    trainer.eval_blimp = True
-    trainer.eval_msgs = True
-    trainer.eval_perplexity = True
+    trainer.evaluation_metrics = ['blimp', 'msgs', 'perplexity', 'glue', 'aoa']
     trainer.evaluate(metric_key_prefix="eval_best") # Note that this will save the best model into the main output dir
 
 if __name__ == "__main__":

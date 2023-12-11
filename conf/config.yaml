@@ -26,10 +26,10 @@ trainer:
   lr: 2e-3 # 1e-4 is used in fairseq; 1e-3 is default in huggingface
   num_warmup_steps: 50_000
   max_training_steps: 200_000
-  eval_blimp: True
-  eval_glue: False
-  eval_msgs: False
-  eval_perplexity: True
+  evaluation_metrics: # One or more of 'blimp', 'blimp_bias', 'perplexity', 'aoa', 'glue' and 'msgs'
+    - blimp
+    - blimp_bias
+    - perplexity
 
 pos_lookup:
   similarity_metric: 'cosine'
