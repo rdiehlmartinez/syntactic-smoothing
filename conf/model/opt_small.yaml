@@ -1,0 +1,12 @@
+name: 'opt'
+
+model_kwargs: {
+  "num_hidden_layers": 8,
+  "num_attention_heads": 8, 
+  "hidden_size": 256,
+  "ffn_dim": 1024,
+  "eos_token_id": 4,
+  "bos_token_id": 3,
+  "pad_token_id": 1,
+  "tie_word_embeddings": false,
+}
