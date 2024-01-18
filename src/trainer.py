@@ -655,9 +655,11 @@ class CustomTrainer(Trainer):
         Initialize a full language model that includes the base model and the mlm head.
         """
 
+        # TODO: If we are using a causal head, then we want to just 
+
         # copy hydra config and change base_model to include mlm head
         lm_config = copy.deepcopy(self.hydra_config)
-        lm_config.model.name = lm_config.model.name + "_mlm"
+        lm_config.model.name = lm_config.model.name + "_lm"
 
         lm_model = load_base_model(lm_config)
 
