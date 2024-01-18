@@ -14,6 +14,13 @@ from src.utils.pacing_fn import get_pacing_fn
 
 @register_task_unit("pos_merge")
 class POSMERGETask(MLMTask):
+
+    # TODO: 
+    # Make this class support the causal approach as well, and automatically switch over to the 
+    # causal approach if the model is a causal model.
+
+    SUPPORTED_MODEL_TYPES = ["encoder", "decoder"]
+
     def __init__(
         self,
         *args,

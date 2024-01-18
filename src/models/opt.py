@@ -4,4 +4,4 @@ from transformers import OPTModel as _OPTModel
 
 @register_model("opt", OPTConfig)
 class OPTModel(_OPTModel):
-    pass
+    MODEL_TYPE = "decoder"

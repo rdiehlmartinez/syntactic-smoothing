@@ -1,13 +1,10 @@
-""" Sets up the masked language modeling base task. """
+""" Sets up causal (auto-regressive) language modeling base task. """
 
+from torch.nn import Linear
 from torch.nn.parallel import DistributedDataParallel
 from transformers import (
     AdamW,
-    RobertaConfig,
     get_linear_schedule_with_warmup,
-)
-from transformers.models.roberta_prelayernorm.modeling_roberta_prelayernorm import (
-    RobertaPreLayerNormLMHead,
 )
 
 from .base_task import BaseTaskUnit
@@ -15,11 +12,10 @@ from .registry import register_task_unit
 
 from ..utils import CustomDataCollatorForLanguageModeling
 
+@register_task_unit("causallm")
+class CausalLMTask(BaseTaskUnit):
 
-@register_task_unit("mlm")
-class MLMTask(BaseTaskUnit):
-
-    SUPPORTED_MODEL_TYPES = ["encoder"]
+    SUPPORTED_MODEL_TYPES = ["decoder"]
 
     def __init__(
         self,
@@ -27,17 +23,11 @@ class MLMTask(BaseTaskUnit):
         **kwargs,
     ) -> None:
         """
-        Initializes the masked language modeling task unit.
+        Initializes the causal language modeling task unit.
         """
         super().__init__(*args, **kwargs)
 
-        mlm_head_config = RobertaConfig(
-            vocab_size=self.tokenizer.vocab_size,  # type: ignore
-            hidden_size=self.hidden_rep_size,
-            **self.task_unit_params["task_head_params"],
-        )
-
-        self._mlm_head = RobertaPreLayerNormLMHead(mlm_head_config).to(
+        self._causal_lm_head = Linear(self.hidden_rep_size, self.tokenizer.vocab_size).to(
             self.device
         )
 
@@ -45,18 +35,18 @@ class MLMTask(BaseTaskUnit):
             "tie_weights", False
         )
         if should_tie_weights:
-            self._mlm_head.decoder.weight = self.base_model.embeddings.word_embeddings.weight
+            self._causal_lm_head.weight = self.base_model.embeddings.word_embeddings.weight
 
         if self.local_rank != -1:
-            self._mlm_head = DistributedDataParallel(
-                self._mlm_head,
+            self._causal_lm_head = DistributedDataParallel(
+                self._causal_lm_head,
                 device_ids=[self.local_rank],
                 output_device=self.local_rank,
             )
 
         # Setting up optimizer and scheduler
         self._optimizer = AdamW(
-            self._mlm_head.parameters(),
+            self._causal_lm_head.parameters(),
             **self.task_unit_params["optimizer_params"],
         )
 
@@ -66,23 +56,12 @@ class MLMTask(BaseTaskUnit):
             num_training_steps=self.task_num_steps,
         )
 
-
     def check_valid_config(self) -> None:
         """
         Checks to see if the task_unit_params contain all required params
         and keyword args to succesfully run the task unit.
         """
-        assert (
-            "mask_probability" in self.task_unit_params["optional_kwargs"]
-        ), "Mask probability needs to be provided to use MLM task unit"
-
-        assert ( 
-            "unmask_probability" in self.task_unit_params["optional_kwargs"]
-        ), "Unmask probability needs to be provided to use MLM task unit"
-
-        assert (
-            "label_smoothing" in self.task_unit_params["optional_kwargs"]
-        ), "Label smoothing needs to be provided to use MLM task unit"
+        pass
 
     @property
     def objective_collator(self):
@@ -92,29 +71,23 @@ class MLMTask(BaseTaskUnit):
 
         return CustomDataCollatorForLanguageModeling(
             tokenizer=self.tokenizer,
-            mlm=True,
+            mlm=False,
             task_unit_name=self.task_unit_name,
-            mlm_probability=self.task_unit_params["optional_kwargs"][
-                "mask_probability"
-            ],
-            unmask_probability=self.task_unit_params["optional_kwargs"][
-                "unmask_probability"
-            ],
         )
 
     @property
     def task_head(self):
         """
-        Returns the instance mlm head.
+        Returns the instance causal head.
         """
-        return self._mlm_head
+        return self._causal_lm_head
 
     @task_head.setter
     def task_head(self, new_head):
         """
-        Sets the instance mlm head.
+        Sets the instance causal head.
         """
-        self._mlm_head = new_head
+        self._causal_lm_head = new_head
 
     @property
     def optimizer(self):

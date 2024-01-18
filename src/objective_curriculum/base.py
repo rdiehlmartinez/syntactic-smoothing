@@ -16,6 +16,9 @@ from src.config import ObjectiveCurriculumParams
 from .units import TASK_UNIT_REGISTRY, BaseTaskUnit
 
 
+# TODO: It might be easier to just have a single task unit that is active for the entire
+# training process, in which case we no longer have a need for the ObjectiveCurriculum class.
+
 class ObjectiveCurriculum:
     def __init__(
         self,
@@ -59,11 +62,7 @@ class ObjectiveCurriculum:
         # setup the different curiculum units
         for unit_name in self._curriculum_cfg.units:
 
-            if "pos" in unit_name and unit_name != "pos_merge":
-                # the unit_name might be pos_(+pos tag identifiers)
-                task_name = "pos"
-            else:
-                task_name = unit_name
+            task_name = unit_name
 
             if task_name not in TASK_UNIT_REGISTRY:
                 raise ValueError(f"Unknown curriculum task unit: {task_name}")
@@ -126,10 +125,15 @@ class ObjectiveCurriculum:
             * The end point for an objective needs to be greater than the start point.
         """
 
-        assert (
-            "mlm" in curriculum_cfg.units or "pos_merge" in curriculum_cfg.units
-        ), "The masked language modeling objective is required."
+        if len(curriculum_cfg.units) == 0 or len(curriculum_cfg.units) >= 2:
+            # NOTE: Unlike for the BabyLM project from which we derive this code, we only allow
+            # one objective unit to be active at a time. We keep the functionality for multiple
+            # units in case we want to use it later.
+            raise ValueError(
+                "For POS SMOOTHING, we only allow one objective unit to be active at a time."
+            )
 
+        # NOTE: There should only be 1 unit 
         for unit in curriculum_cfg.units:
             if unit not in curriculum_cfg.steps:
                 return False
