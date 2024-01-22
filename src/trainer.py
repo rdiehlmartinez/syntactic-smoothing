@@ -303,6 +303,9 @@ class CustomTrainer(Trainer):
                 # as well as the global step in order to be able to use the temperature schedule
                 optional_kwargs["pos_lookup"] = self.pos_lookup
                 optional_kwargs["global_step"] = self.state.global_step
+            elif unit_name == "mlm": 
+                # NOTE: IMPLEMENTING LABEL SMOOTHING WITH 0.5 
+                optional_kwargs["label_smoothing"] = unit.task_unit_params["optional_kwargs"]["label_smoothing"]
             unit_loss = unit.compute_loss(model, inputs, loss_kwargs=optional_kwargs)
 
             # averaging over the processes
