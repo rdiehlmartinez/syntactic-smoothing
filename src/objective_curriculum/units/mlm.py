@@ -147,6 +147,7 @@ class MLMTask(BaseTaskUnit):
             num_training_steps=self.task_num_steps,
         )
 
+
     def check_valid_config(self) -> None:
         """
         Checks to see if the task_unit_params contain all required params
@@ -159,6 +160,10 @@ class MLMTask(BaseTaskUnit):
         assert ( 
             "unmask_probability" in self.task_unit_params["optional_kwargs"]
         ), "Unmask probability needs to be provided to use MLM task unit"
+
+        assert (
+            "label_smoothing" in self.task_unit_params["optional_kwargs"]
+        ), "Label smoothing needs to be provided to use MLM task unit"
 
     @property
     def objective_collator(self):
