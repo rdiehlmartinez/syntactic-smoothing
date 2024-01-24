@@ -1,4 +1,4 @@
-""" Sets up the masked language modeling base task. """
+""" Sets up the pos smoothing task. """
 
 # typing imports
 from typing import Any, Dict, Optional
@@ -7,13 +7,15 @@ import torch
 from torch import Tensor
 from torch.nn import Module
 
+from .base_task import BaseObjectiveTask
 from .mlm import MLMTask
-from .registry import register_task_unit
+from .causal import CausalLMTask 
+from .registry import register_objective_task
 
 from src.utils.pacing_fn import get_pacing_fn
 
-@register_task_unit("pos_merge")
-class POSMERGETask(MLMTask):
+@register_objective_task("pos_smoothing")
+class POSSMOOTHINGTask(BaseObjectiveTask):
 
     # TODO: 
     # Make this class support the causal approach as well, and automatically switch over to the 
@@ -27,19 +29,50 @@ class POSMERGETask(MLMTask):
         **kwargs,
     ) -> None:
         """
-        Initialize the POS MERGE task unit. The idea is to merge in POS tags as part of the 
-        masked language modeling task by smoothing out the distribution of the masked tokens
-        to better update the ones that are rare. 
+        Initialize the POS SMOOTHNING objective task.
+        The idea is to merge in POS tags as part of the masked language modeling task by smoothing
+        out the distribution of the masked tokens to better update the ones that are rare. 
         """
         super().__init__(*args, **kwargs)
 
-        self.gate_pacing_fn_kwargs = self.task_unit_params["optional_kwargs"]["gate_pacing_fn_kwargs"]
+        self.gate_pacing_fn_kwargs = self.objective_task_params["optional_kwargs"]["gate_pacing_fn_kwargs"]
 
         # initialize the pacing function  
         self.gate_pacing_fn = get_pacing_fn(
-            total_steps=self.task_num_steps,
+            total_steps=self.num_training_steps,
             **self.gate_pacing_fn_kwargs
         )
+
+        if self.base_model.MODEL_TYPE == "encoder":
+            self.base_task = MLMTask(*args, **kwargs)
+        else:
+            self.base_task = CausalLMTask(*args, **kwargs)
+        
+    def optimizer_step(self) -> None:
+        return self.base_task.optimizer_step()
+
+    @property
+    def optimizer(self):
+        return self.base_task.optimizer
+
+    @property
+    def scheduler(self):
+        return self.base_task.scheduler
+    
+    @property
+    def objective_collator(self):
+        return self.base_task.objective_collator
+
+    @property
+    def task_head(self):
+        return self.base_task.task_head
+    
+    @task_head.setter
+    def task_head(self, value):
+        self.base_task.task_head = value
+
+    def save(self, save_dir: str) -> None:
+        self.base_task.save(save_dir)
 
     def compute_loss(
         self,
@@ -56,7 +89,7 @@ class POSMERGETask(MLMTask):
 
         if override_input_ids is not None and override_lables is not None:
             # NOTE: This happens during inference when we are passing in a custom input
-            return super().compute_loss(
+            return self.base_task.compute_loss(
                 model,
                 inputs,
                 override_input_ids=override_input_ids,
@@ -81,20 +114,20 @@ class POSMERGETask(MLMTask):
         # to the POS merge labels and how much to the correct label
         label_gate = self.gate_pacing_fn(global_step)
 
-        # labels for masked language modeling 
-        mlm_labels = inputs['labels_mlm']
+        # labels for language modeling 
+        labels = inputs['labels']
         vocab_size = pos_lookup.lookup_matrix.shape[0]
 
         # posmerge_labels: [batch_size, vocab_size, seq_len]
         posmerge_labels = torch.zeros(
-            (mlm_labels.shape[0], vocab_size, mlm_labels.shape[1]), 
+            (labels.shape[0], vocab_size, labels.shape[1]), 
             dtype=torch.float32,
             device=self.device
         ) 
 
-        # find target labels in mlm_labels (will be -100 for non-masked tokens)
-        target_indices = (mlm_labels != -100)
-        masked_tokens = mlm_labels[target_indices]
+        # find target labels in labels (will be -100 for non-masked tokens)
+        target_indices = (labels != -100)
+        masked_tokens = labels[target_indices]
 
         # similarity_vals: [masked_tokens_num, vocab_size]
         similarity_vals = pos_lookup.find_similar(masked_tokens).to(self.device)
@@ -111,15 +144,16 @@ class POSMERGETask(MLMTask):
 
         loss_kwargs['reduction'] = 'none'
 
-        loss_unreduced = super().compute_loss(
+        loss_unreduced = self.base_task.compute_loss(
             model,
             inputs,
-            override_input_ids=inputs["input_ids_mlm"],
+            override_input_ids=inputs["input_ids"],
             override_lables=posmerge_labels,
             loss_kwargs=loss_kwargs,
         )
 
-        loss_mask = (mlm_labels != -100)
+        _, labels = self.base_task.logit_label_transform(labels=labels)
+        loss_mask = (labels != -100)
 
         loss = loss_unreduced[loss_mask].mean()
 
@@ -127,10 +161,10 @@ class POSMERGETask(MLMTask):
 
     def check_valid_config(self) -> None:
         """
-        Checks to see if the task_unit_params contain all required params
-        and keyword args to succesfully run the task unit.
+        Checks to see if the objective_task_params contain all required params
+        and keyword args to succesfully run the objective task.
         """
-        assert("gate_pacing_fn_kwargs" in self.task_unit_params["optional_kwargs"]
+        assert("gate_pacing_fn_kwargs" in self.objective_task_params["optional_kwargs"]
         ), "Must provide keyword arguments for the gating pacing function to use POS merge" 
 
         super().check_valid_config()

@@ -1,50 +1,19 @@
-
 # typing imports
 from typing import Any, Dict
 
 from transformers import DataCollatorForLanguageModeling
 
-class StackedCollator:
-    def __init__(self, collators):
-        self.collators = collators
-
-    def __call__(self, *args, **kwargs):
-        batch = {}
-        for collator_name, collator in self.collators.items():
-            batch.update(collator(*args, **kwargs))
-        return batch
-
 class CustomDataCollatorForLanguageModeling(DataCollatorForLanguageModeling):
-    def __init__(self, task_unit_name, unmask_probability=0.1, *args, **kwargs):
+    def __init__(self, unmask_probability=0.1, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.task_unit_name = task_unit_name
         self.unmask_probability = unmask_probability
-
-    def torch_call(self, *args):
-        """
-        Prepares data for the masked language modeling task.
-
-        NOTE: The Datacollators should always return a batch with the following keys:
-        {
-            input_ids_{task_unit_name}
-            labels_{task_unit_name}
-            pos_tags
-        }
-        """
-        batch: Dict[str, Any] = super().torch_call(*args)
-        assert "labels" in batch
-
-        batch[f"input_ids_{self.task_unit_name}"] = batch["input_ids"]
-        batch[f"labels_mlm_{self.task_unit_name}"] = batch["labels"]
-        del batch["labels"]  # each task has its own labels
-        del batch["input_ids"]  # each task has its own input_ids
-        return batch
 
     # We override this function to allow us to adjust the probability of unmasking
     def torch_mask_tokens(self, inputs: Any, special_tokens_mask=None):
         """
         Prepare masked tokens inputs/labels for masked language modeling: 80% MASK, 10% random, 10% original.
         """
+
         import torch
 
         labels = inputs.clone()
