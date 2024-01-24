@@ -79,7 +79,9 @@ class TrainerParams(DictConfig):
 
 ## Objective curriculum learning parameters ##
 @dataclass
-class ObjectiveCurriculumUnitParams(DictConfig):
+class ObjectiveTaskParams(DictConfig):
+
+    name: str
 
     # parameters for the task head architecture
     task_head_params: Optional[Dict[str, Any]] = field(default_factory=dict)
@@ -92,28 +94,6 @@ class ObjectiveCurriculumUnitParams(DictConfig):
 
     # Additional optional kwargs dependent on the objective curriculum unit
     optional_kwargs: Optional[Dict[str, Any]] = field(default_factory=dict)
-
-
-@dataclass
-class ObjectiveCurriculumParams(DictConfig):
-    # objective curriculum learning parameters
-
-    units: Dict[str, ObjectiveCurriculumUnitParams]
-    steps: Dict[str, List[float]]
-
-
-## Data-driven curriculum learning parameters ##
-@dataclass
-class PacingFunctionParams(Mapping[str, Any]):
-    # Num of steps to take (in percent) before beginning the curriculum
-    start_percent: float
-    # Num of steps to take (in percent) before ending the curriculum
-    end_percent: float
-    # Difficulty (percentile of the data) to start at
-    starting_difficulty: float
-    # Max difficulty (percentile of the data) to end at; 1.0 means include all data at the
-    # end of the curriculum
-    max_difficulty: Optional[float] = 1.0
 
 
 # Paramters for POS lookup class 
@@ -131,5 +111,5 @@ class BabyLMConfig(DictConfig):
     data_preprocessing: DataPreprocessingParams
     model: ModelParams
     trainer: TrainerParams
-    objective_curriculum: ObjectiveCurriculumParams
+    objective_task: ObjectiveTaskParams
     pos_lookup: POSLookupParams
