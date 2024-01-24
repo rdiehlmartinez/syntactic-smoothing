@@ -8,7 +8,6 @@ from collections import defaultdict
 from typing import Dict, List, Tuple, Union
 
 import torch
-from torch.utils.data.sampler import Sampler
 from datasets import Dataset
 from transformers import PreTrainedTokenizerFast
 
@@ -46,21 +45,6 @@ def base_collate_fn(_samples: List[Dict[str, List[Tuple[int, float]]]]):
         batch[key] = torch.stack(val)
 
     return batch
-
-
-class SequentialSubsetSampler(Sampler):
-    """
-    Samples elements sequentially from a set of indices, always in the same order.
-    """
-
-    def __init__(self, indices):
-        self.indices = indices
-
-    def __iter__(self):
-        return iter(self.indices)
-
-    def __len__(self):
-        return len(self.indices)
 
 class POSLookup(object):
     def __init__(self, dataset: Dataset, tokenizer: PreTrainedTokenizerFast, similarity_metric: str = "cosine"):
@@ -253,7 +237,6 @@ class DatasetPreprocessor(object):
             "special_tokens_mask": [],
             "attention_mask": [],
             "pos_tags": [],
-            "filename": [],
         }
 
         full_tokenized_inputs = {
@@ -261,13 +244,11 @@ class DatasetPreprocessor(object):
             "special_tokens_mask": [],
             "attention_mask": [],
             "pos_tags": [],
-            "filename": [],
         }
 
         for example in range(len(examples["text"])):
             text = examples["text"][example]
             tagged_text = examples["tagged_text"][example]
-            filename = examples["filename"][example]
 
             tokenized_inputs = self.tokenizer(
                 text,
@@ -321,9 +302,6 @@ class DatasetPreprocessor(object):
                     tokenized_inputs["attention_mask"]  # type: ignore
                 )
                 full_tokenized_inputs["pos_tags"].extend(pos_tags)  # type: ignore
-                full_tokenized_inputs["filename"].extend(
-                    [filename] * len(tokenized_inputs["input_ids"])  # type: ignore
-                )
             else:
                 # Split into multiple examples if the input is too long
                 for i in range(
@@ -353,7 +331,6 @@ class DatasetPreprocessor(object):
                     batch["pos_tags"].append(
                         pos_tags[i : i + self.max_input_length]
                     )
-                    batch["filename"].append(filename)
                 # Need to do extra padding for pos tags because the tokenizer padding doesn't work on them
                 if len(batch["pos_tags"][-1]) < self.max_input_length:
                     batch["pos_tags"][-1].extend(
@@ -381,7 +358,6 @@ class DatasetPreprocessor(object):
                 batch["pos_tags"].append(
                     full_tokenized_inputs["pos_tags"][i : i + self.max_input_length]  # type: ignore
                 )
-                batch["filename"].append(full_tokenized_inputs["filename"][i])
 
         if self.callback_functions:
             for callback_function in self.callback_functions:
