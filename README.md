@@ -23,17 +23,8 @@ We run automatic type-checking on all the passed in config files, and also check
 
 The `/conf` directory stores all the default configs and subconfigs. The entry point to the default config we use is `conf/config.yaml`. Taking a look at the `conf` directory, you will notice that each sub-directory of `conf` (i.e. `conf/data_curriculum`) stores a sub-configuration. 
 
-#### Specifying the Objective Function 
-To create an objective-driven curricula you need to first specify a general strategy, by creating a new `<strategy_name>.yaml` in the `conf/objective_curriculum` directory. This strategy stores information relating to what objectives will be used over the course of training and when to switch the training objective. Each training objective - what we call objective units - that you plan to use over the course of training also needs to be specified. These could be "mlm", "pos", or other custom objectives specified by config files in the `curriculum/units` dir. The strategy config is where you define a dictionary `steps`, which maps integer training step spans over which each objective unit is active. 
-
-We define anything to do with the objective function currently inside of the `src/objective_curriculum` module. The objective curriculum is organized around an orchestrator class `ObjectiveCurriculum` that - just like the data loader - maintains the current global step and uses that information to determine which objective units should be activated. The `ObjectiveCurriculum`, when queried, can then return individual objective units which are implemented under `src/objective_curriculum/units`. Each unit stores its own weights associated with the task head for the objective it implements, as well as an optimizer and scheduler. During training when data is fed through the model we first compute the hidden state of the model for a given batch of data and then pass those hidden states on to each of the task units. 
-### DataLoading 
-
-We define a CustomDataLoader in `/src/dataloader.py` that subclasses the normal hugging face Dataloader class. In the CustomDataLoader, unlike in the normal DataLoader, we are able to keep track of the global step number of training (i.e. how many batches of training data have already been trained on). This information is useful because it allows us to configure special behavior of the DataLoader for different parts of training. 
-
-In particular, when the CustomDataLoader goes to yield a next batch of data, we enable the DataLoader to check whether at the current step it should apply a different collator function to preprocess the data for a given (perhaps new) objective function. 
-
-Thus, the CustomDataLoader is where a large part of the logic for objective-driven curricula is implemented.  
+#### Specifying the Objective Task 
+The main logic for specifying objective tasks is found within `src/objective_task`, which contains most of the custom logic for pos-smoothing. 
 
 ### Preprocessing and Tokenization
 
