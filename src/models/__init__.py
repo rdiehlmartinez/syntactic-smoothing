@@ -5,7 +5,9 @@ from transformers import PreTrainedModel
 # typing inmports
 from ..config import BabyLMConfig
 from .registry import CONFIG_REGISTRY, MODEL_REGISTRY
-from .roberta import *
+
+# Import all the models
+from . import roberta, opt
 
 # A logger for this file
 logger = logging.getLogger(__name__)
@@ -31,7 +33,7 @@ def load_base_model(cfg: BabyLMConfig) -> PreTrainedModel:
             )
             logger.info(f"Loaded model config from {config.name_or_path}")
         else:
-            logger.info(f"Initialized model config from scratch")
+            logger.info("Initialized model config from scratch")
             model = MODEL_REGISTRY[cfg.model.name](config)
     else:
         raise ValueError(f"Model {cfg.model.name} not found in registry")

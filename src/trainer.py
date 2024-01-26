@@ -22,7 +22,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 # Model Training
-from transformers import PreTrainedTokenizerFast, Trainer, TrainerCallback, TrainerControl, TrainerState
+from transformers import PreTrainedTokenizerFast, Trainer, TrainerCallback 
 from transformers.modeling_utils import PreTrainedModel, unwrap_model
 from transformers.trainer_utils import (
     HubStrategy,
@@ -41,7 +41,6 @@ from src.models import load_base_model
 from src.utils.data import base_collate_fn, POSLookup
 from src.utils.inference import (
     compute_trainer_perplexity,
-    prepare_dataset_for_ppl_inference,
 )
 
 # typing imports
@@ -54,12 +53,10 @@ from .evaluators.blimp_bias_evaluator import BlimpBiasEvaluator
 from .evaluators.perplexity_bias_evaluator import PerplexityBiasEvaluator
 
 # Objective Curriculum
-from .objective_curriculum import ObjectiveCurriculum
+from .objective_task import load_objective_task
 
-from .dataloader import CurriculumDataLoader
 
 logger = logging.getLogger(__name__)
-objective_cl_logger = logging.getLogger("Objective Curriculum")
 
 POSSIBLE_METRICS = ["blimp", "perplexity", "blimp_bias", "aoa", "glue", "msgs"]
 
@@ -68,11 +65,11 @@ class TaskTrainerCallback(TrainerCallback):
     A TrainerCallback that handles updating the task heads of the model.
     """
 
-    def __init__(self, objective_curriculum) -> None:
-        self.objective_curriculum = objective_curriculum
+    def __init__(self, objective_task) -> None:
+        self.objective_task = objective_task
 
-    def on_step_end(self, args, state, control, **kwargs) -> None:
-        self.objective_curriculum.optimizer_step(state.global_step)
+    def on_step_end(self, *args, **kwargs) -> None:
+        self.objective_task.optimizer_step()
 
 class CustomTrainer(Trainer):
     def __init__(
@@ -106,16 +103,9 @@ class CustomTrainer(Trainer):
 
         self.experiment_group = hydra_config.experiment.group
         self.experiment_name = hydra_config.experiment.name
-        self.evaluation_metrics = hydra_config.trainer.evaluation_metrics
+        self.evaluation_metrics = hydra_config.trainer.evaluation_metrics                    
 
         super().__init__(args=args, **kwargs)
-
-        self.objective_curriculum_cfg = hydra_config.objective_curriculum
-
-        # NOTE: The hidden dimension of the base model (is the input dimension to the task head)
-        # We check that this variable is set in the config file when loading the base model
-
-        hidden_rep_size = hydra_config.model.model_kwargs["hidden_size"]
 
         model = kwargs.get("model", None)
 
@@ -130,24 +120,21 @@ class CustomTrainer(Trainer):
                     f"Invalid evaluation metric {metric}. Possible metrics are {POSSIBLE_METRICS}"
                 )
 
-        self.objective_curriculum = ObjectiveCurriculum(
-            curriculum_cfg=self.objective_curriculum_cfg,
-            max_steps=args.max_steps,
-            hidden_rep_size=hidden_rep_size,
+        self.objective_task = load_objective_task(
+            cfg=hydra_config,
+            hidden_rep_size=model.config.hidden_size,
             tokenizer=tokenizer,
             device=self.args.device,
             local_rank=self.args.local_rank,
             base_model=model,
         )
 
-        objective_cl_logger.info(
-            f"(Using objective curriculum configuration {self.objective_curriculum_cfg}"
-        )
+        self.data_collator = self.objective_task.objective_collator
 
         self.tokenizer = tokenizer
         self.pos_lookup = pos_lookup
 
-        self.add_callback(TaskTrainerCallback(self.objective_curriculum))
+        self.add_callback(TaskTrainerCallback(self.objective_task))
 
     def init_git_repo(self, at_init: bool = False) -> None:
         """
@@ -240,26 +227,6 @@ class CustomTrainer(Trainer):
         )
         OmegaConf.save(self.hydra_config, config_output_path)
 
-    def _get_ignore_columns(self, dataset) -> List[str]:
-        """
-        Returns the list of columns to ignore when training. This is used to remove columns that
-        are not used for training, but are used for curriculum pacing.
-
-        Args:
-            * dataset (:class:`~datasets.Dataset`): The dataset to use for training.
-
-        Returns:
-            * (List[str]): The list of columns to ignore when training.
-        """
-        self._set_signature_columns_if_needed()
-        signature_columns = self._signature_columns
-        if signature_columns is None:
-            signature_columns = []
-        ignore_columns = list(
-            set(dataset.column_names) - set(signature_columns)
-        )
-        return ignore_columns
-
     def log(self, logs: Dict[str, float]) -> None:
         """
         Log `logs` on the various objects watching training.
@@ -281,8 +248,6 @@ class CustomTrainer(Trainer):
         """
         We compute the loss for each objective unit, and then sum them up.
         """
-        total_loss = torch.tensor(0.0).to(self.args.device)
-
         loss_metrics = {}
 
         if self.state.global_step >= self.args.max_steps:
@@ -294,25 +259,19 @@ class CustomTrainer(Trainer):
                 """
             )
 
-        for unit_name, unit in self.objective_curriculum[
-            self.state.global_step
-        ].items():
-            optional_kwargs = {}
-            if unit_name == "pos_merge":
-                # NOTE: We need to pass in the pos lookup to the POS MERGE unit 
-                # as well as the global step in order to be able to use the temperature schedule
-                optional_kwargs["pos_lookup"] = self.pos_lookup
-                optional_kwargs["global_step"] = self.state.global_step
-            elif unit_name == "mlm": 
-                # NOTE: IMPLEMENTING LABEL SMOOTHING WITH 0.5 
-                optional_kwargs["label_smoothing"] = unit.task_unit_params["optional_kwargs"]["label_smoothing"]
-            unit_loss = unit.compute_loss(model, inputs, loss_kwargs=optional_kwargs)
+        optional_kwargs = {}
+        objective_task_name = self.objective_task.objective_task_name
 
-            # averaging over the processes
-            total_unit_loss_scalar = self._nested_gather(unit_loss).mean().item()  # type: ignore
-            loss_metrics[f"loss_{unit_name}"] = total_unit_loss_scalar
+        if objective_task_name == "pos_smoothing":
+            # NOTE: We need to pass in the pos lookup to the POS SMOOTHING objective
+            # as well as the global step in order to be able to use the temperature schedule
+            optional_kwargs["pos_lookup"] = self.pos_lookup
+            optional_kwargs["global_step"] = self.state.global_step
+        rank_loss = self.objective_task.compute_loss(model, inputs, loss_kwargs=optional_kwargs)
 
-            total_loss += unit_loss
+        # averaging over the processes
+        total_loss = self._nested_gather(rank_loss).mean().item()  # type: ignore
+        loss_metrics[f"loss_{objective_task_name}"] = total_loss
 
         if (
             self.args.logging_strategy == IntervalStrategy.STEPS
@@ -321,49 +280,7 @@ class CustomTrainer(Trainer):
 
             self.log(loss_metrics)
 
-        return total_loss
-
-    def get_train_dataloader(self) -> DataLoader:
-        """
-        Returns the training :class:`~torch.utils.data.DataLoader`.
-        The dataset is sorted by the scoring function, if provided.
-
-        Returns:
-            * (CustomDataLoader): The custom training dataloader, a subclass instance of the torch
-                Dataloader.
-        """
-
-        assert self.train_dataset is not None
-
-        # NOTE: The standard Trainer.get_train_dataloader() method removes unused columns for
-        # training, we only remove the filename column here.
-        # The other columns in the datast should now be either of type float or int
-        # (filename is the only str column).
-        # We will remove the other columns in a postprocessing step (after the objective
-        # function collation).
-
-        train_sampler = self._get_train_sampler()
-
-        train_dataset = self.train_dataset.remove_columns("filename")  # type: ignore
-
-        # NOTE: In a postprocessing step (after the objective function collation), we will still
-        # need to remove columns that are not in the model signature. We need to pass in these
-        # ignore columns to the dataloader so that they are not included in the batch, but we
-        # might want to use this information when generating the objective.
-        ignore_columns = self._get_ignore_columns(train_dataset)
-
-        return CurriculumDataLoader(
-            global_stepnum=self.state.global_step,
-            objective_curriculum=self.objective_curriculum,  # type: ignore
-            tokenizer=self.tokenizer,
-            ignore_columns=ignore_columns,
-            dataset=train_dataset,
-            sampler=train_sampler,
-            batch_size=self._train_batch_size,
-            drop_last=self.args.dataloader_drop_last,
-            num_workers=self.args.dataloader_num_workers,
-            pin_memory=self.args.dataloader_pin_memory,
-        )
+        return rank_loss
 
     def evaluate(
         self,
@@ -423,10 +340,6 @@ class CustomTrainer(Trainer):
             per_token_losses = []
 
             with torch.no_grad():
-
-                eval_subset = prepare_dataset_for_ppl_inference(
-                    self, eval_subset
-                )
 
                 eval_batch_size = 4
 
@@ -520,9 +433,6 @@ class CustomTrainer(Trainer):
                         )
                     )
 
-                    _curr_eval_subset = prepare_dataset_for_ppl_inference(
-                        self, _curr_eval_subset
-                    )
 
                     _curr_eval_subset_dataloader = DataLoader(
                         _curr_eval_subset,  # type: ignore
@@ -580,7 +490,7 @@ class CustomTrainer(Trainer):
                 process_index=self.args.process_index,  # world (global) process index
                 world_size=self.args.world_size,
                 dry_run=self.dry_run,
-                keep_predictions=True, # NOTE: For POS MERGE we need to keep the predictions
+                keep_predictions=True, # NOTE: For POS SMOOTHING we need to keep the predictions
                 run_aoa='aoa' in self.evaluation_metrics,
             )
             # Get average of blimp metrics
@@ -597,7 +507,7 @@ class CustomTrainer(Trainer):
                 dry_run=self.dry_run,
                 run_glue='glue' in self.evaluation_metrics,
                 run_msgs='msgs' in self.evaluation_metrics,
-                keep_predictions=True, # NOTE: For POS MERGE we need to keep the predictions
+                keep_predictions=True, # NOTE: For POS SMOOTHING we need to keep the predictions
             )
             # Get average of glue metrics
             finetune_metrics = finetune_evaluator()
@@ -657,7 +567,7 @@ class CustomTrainer(Trainer):
 
         # copy hydra config and change base_model to include mlm head
         lm_config = copy.deepcopy(self.hydra_config)
-        lm_config.model.name = lm_config.model.name + "_mlm"
+        lm_config.model.name = lm_config.model.name + "_lm"
 
         lm_model = load_base_model(lm_config)
 
@@ -668,10 +578,8 @@ class CustomTrainer(Trainer):
             unwrap_model(self.model.base_model),
         )
 
-        lm_head_key = "mlm" if "mlm" in self.objective_curriculum.units else "pos_merge"
-
         lm_model.lm_head = unwrap_model(
-            self.objective_curriculum.units[lm_head_key].task_head
+            self.objective_task.task_head
         )
 
         return lm_model
@@ -693,9 +601,9 @@ class CustomTrainer(Trainer):
             )
 
             mlm_model_dir = os.path.join(output_dir, "lm_model")
-            task_heads_dir = os.path.join(output_dir, "task_heads")
+            task_head_dir = os.path.join(output_dir, "task_head")
             os.makedirs(mlm_model_dir, exist_ok=True)
-            os.makedirs(task_heads_dir, exist_ok=True)
+            os.makedirs(task_head_dir, exist_ok=True)
 
             # save the full language model + the associated tokenizer (for inference)
             lm_model = self._initialize_full_lm_model()
@@ -703,7 +611,7 @@ class CustomTrainer(Trainer):
 
             self.tokenizer.save_pretrained(mlm_model_dir)
 
-            self.objective_curriculum.save(output_dir=task_heads_dir)
+            self.objective_task.save(output_dir=task_head_dir)
             
     def _save_checkpoint(self, model, trial, metrics=None):
         """ Also save out the prediction files"""
@@ -745,16 +653,16 @@ class CustomTrainer(Trainer):
     def _load_from_checkpoint(self, resume_from_checkpoint, model=None):
         super()._load_from_checkpoint(resume_from_checkpoint, model=model)
 
-        task_head_dir = os.path.join(resume_from_checkpoint, "task_heads")
-        self.objective_curriculum.load(task_head_dir)
+        task_head_dir = os.path.join(resume_from_checkpoint, "task_head")
+        self.objective_task.load(task_head_dir)
 
     def _load_best_model(self):
         super()._load_best_model()
 
         task_head_dir = os.path.join(
-            self.state.best_model_checkpoint, "task_heads"
+            self.state.best_model_checkpoint, "task_head"
         )
-        self.objective_curriculum.load(task_head_dir)
+        self.objective_task.load(task_head_dir)
 
     def _wrap_model(self, model, training=True, dataloader=None):
         if self.args.parallel_mode == ParallelMode.DISTRIBUTED:

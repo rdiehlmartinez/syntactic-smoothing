@@ -1,0 +1,16 @@
+name: "causal_lm"
+
+task_head_params: {
+  "tie_weights": true,
+}
+
+optimizer_params: { 
+  "lr": 1e-3,
+}
+
+scheduler_params: {
+  "num_warmup_steps": 20_000,
+}
+
+optional_kwargs: { 
+}
