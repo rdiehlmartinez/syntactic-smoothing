@@ -1,4 +1,4 @@
-# POS MERGE
+# POS SMOOTHING
 
 ## Setup 
 
