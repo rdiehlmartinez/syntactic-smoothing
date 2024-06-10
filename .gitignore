@@ -177,7 +177,6 @@ misc/default.png
 misc/profile.png
 
 # ignoring additional custom folders
-notebooks/
 clones/
 plots/
 
